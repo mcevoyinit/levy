@@ -27,7 +27,15 @@ On the client side, pympp's `Client` handles the 402 automatically:
 from mpp.client import Client
 from mpp.methods.tempo import tempo, TempoAccount, ChargeIntent
 
-async with Client(methods=[tempo(...)]) as client:
+account = TempoAccount.from_key("0x<your-private-key>")
+
+async with Client(methods=[tempo(
+    account=account,
+    intents={"charge": ChargeIntent(
+        chain_id=42431,  # Moderato testnet (use 4217 for mainnet)
+        rpc_url="https://rpc.moderato.tempo.xyz",
+    )},
+)]) as client:
     r = await client.get("https://your-api.com/search?query=tempo")
     print(r.json())  # paid automatically, got results
 ```

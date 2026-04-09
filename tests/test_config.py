@@ -1,7 +1,10 @@
 """Tests for LevyConfig."""
 
+import logging
 import os
+
 from levy.config import LevyConfig
+from levy.decorator import _get_mpp, configure
 from pytempo.contracts.addresses import PATH_USD
 
 
@@ -46,3 +49,23 @@ class TestFromEnv:
         c = LevyConfig.from_env()
         assert c.chain_id == 4217
         assert c.secret_key == "levy-dev-secret"
+
+
+class TestRecipientWarning:
+    def test_empty_recipient_logs_warning(self, caplog):
+        """When recipient is empty string, _get_mpp should log a warning."""
+        import levy.decorator
+        levy.decorator._mpp = None  # force re-creation
+        cfg = LevyConfig(recipient="", secret_key="test-secret")
+        with caplog.at_level(logging.WARNING, logger="levy"):
+            _get_mpp(cfg)
+        assert any("LEVY_RECIPIENT is not set" in msg for msg in caplog.messages)
+
+    def test_set_recipient_no_warning(self, caplog):
+        """When recipient is set, no warning should be logged."""
+        import levy.decorator
+        levy.decorator._mpp = None
+        cfg = LevyConfig(recipient="0xabc123", secret_key="test-secret")
+        with caplog.at_level(logging.WARNING, logger="levy"):
+            _get_mpp(cfg)
+        assert not any("LEVY_RECIPIENT is not set" in msg for msg in caplog.messages)

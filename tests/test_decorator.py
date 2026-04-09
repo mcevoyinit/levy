@@ -1,8 +1,12 @@
 """Tests for the @levy decorator — the core of the library."""
 
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, patch
+
 import pytest
 from fastapi import FastAPI, Request
 from httpx import AsyncClient, ASGITransport
+from mpp import Credential, ChallengeEcho, Receipt
 from mpp.methods.tempo import TempoAccount
 
 from levy import levy, LevyConfig
@@ -194,3 +198,179 @@ class TestInvalidAuth:
     async def test_bearer_token_returns_402(self, client):
         r = await client.get("/paid", headers={"Authorization": "Bearer abc123"})
         assert r.status_code == 402
+
+
+def _make_fake_credential_receipt():
+    """Build a (Credential, Receipt) tuple for happy-path mocking."""
+    echo = ChallengeEcho(
+        id="test-id",
+        realm="test",
+        method="tempo",
+        intent="charge",
+        request="eyJ0ZXN0IjoxfQ",
+    )
+    credential = Credential(
+        challenge=echo,
+        payload={"type": "transaction", "signature": "0xdeadbeef"},
+        source="0x" + "ab" * 20,
+    )
+    receipt = Receipt(
+        status="success",
+        timestamp=datetime.now(UTC),
+        reference="0x" + "ff" * 32,
+        method="tempo",
+    )
+    return credential, receipt
+
+
+class TestHappyPath:
+    """Prove that a valid payment credential → 200 with credential/receipt data."""
+
+    @pytest.mark.asyncio
+    async def test_valid_payment_returns_200(self):
+        """When mpp.charge() returns (credential, receipt), the handler
+        receives them and the endpoint returns 200."""
+        credential, receipt = _make_fake_credential_receipt()
+
+        mock_mpp = AsyncMock()
+        mock_mpp.charge = AsyncMock(return_value=(credential, receipt))
+
+        with patch("levy.decorator._get_mpp", return_value=mock_mpp):
+            app = FastAPI()
+
+            @app.get("/paid")
+            @levy("0.01", description="Test endpoint")
+            async def paid(request: Request, *, credential, receipt):
+                return {
+                    "paid": True,
+                    "payer": credential.source,
+                    "receipt_ref": receipt.reference,
+                }
+
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                r = await client.get(
+                    "/paid",
+                    headers={"Authorization": "Payment test-credential"},
+                )
+
+        assert r.status_code == 200
+        body = r.json()
+        assert body["paid"] is True
+        assert body["payer"] == credential.source
+        assert body["receipt_ref"] == receipt.reference
+
+    @pytest.mark.asyncio
+    async def test_credential_and_receipt_injected_into_handler(self):
+        """Verify the exact credential and receipt objects are passed through."""
+        credential, receipt = _make_fake_credential_receipt()
+        captured = {}
+
+        mock_mpp = AsyncMock()
+        mock_mpp.charge = AsyncMock(return_value=(credential, receipt))
+
+        with patch("levy.decorator._get_mpp", return_value=mock_mpp):
+            app = FastAPI()
+
+            @app.get("/capture")
+            @levy("0.50")
+            async def capture(request: Request, *, credential, receipt):
+                captured["credential_source"] = credential.source
+                captured["receipt_reference"] = receipt.reference
+                captured["receipt_status"] = receipt.status
+                return {"ok": True}
+
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                r = await client.get(
+                    "/capture",
+                    headers={"Authorization": "Payment test-credential"},
+                )
+
+        assert r.status_code == 200
+        assert captured["credential_source"] == "0x" + "ab" * 20
+        assert captured["receipt_reference"] == "0x" + "ff" * 32
+        assert captured["receipt_status"] == "success"
+
+    @pytest.mark.asyncio
+    async def test_happy_path_with_query_params(self):
+        """Verify query params still work when payment succeeds."""
+        credential, receipt = _make_fake_credential_receipt()
+
+        mock_mpp = AsyncMock()
+        mock_mpp.charge = AsyncMock(return_value=(credential, receipt))
+
+        with patch("levy.decorator._get_mpp", return_value=mock_mpp):
+            app = FastAPI()
+
+            @app.get("/search")
+            @levy("0.01")
+            async def search(request: Request, query: str = "default", *, credential, receipt):
+                return {"query": query, "paid": True}
+
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                r = await client.get(
+                    "/search?query=hello",
+                    headers={"Authorization": "Payment test-credential"},
+                )
+
+        assert r.status_code == 200
+        body = r.json()
+        assert body["query"] == "hello"
+        assert body["paid"] is True
+
+
+class TestChargeErrorHandling:
+    """Prove that exceptions in mpp.charge() return 500 instead of crashing."""
+
+    @pytest.mark.asyncio
+    async def test_charge_exception_returns_500(self):
+        """When mpp.charge() raises, the endpoint should return 500 JSON."""
+        mock_mpp = AsyncMock()
+        mock_mpp.charge = AsyncMock(side_effect=RuntimeError("RPC connection failed"))
+
+        with patch("levy.decorator._get_mpp", return_value=mock_mpp):
+            app = FastAPI()
+
+            @app.get("/paid")
+            @levy("0.01")
+            async def paid(request: Request, *, credential, receipt):
+                return {"paid": True}
+
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                r = await client.get(
+                    "/paid",
+                    headers={"Authorization": "Payment test-credential"},
+                )
+
+        assert r.status_code == 500
+        body = r.json()
+        assert body["error"] == "Internal Server Error"
+        assert "RPC connection failed" in body["detail"]
+
+    @pytest.mark.asyncio
+    async def test_charge_value_error_returns_500(self):
+        """ValueError from charge() (e.g. missing recipient) should also 500."""
+        mock_mpp = AsyncMock()
+        mock_mpp.charge = AsyncMock(
+            side_effect=ValueError("recipient must be set on the method")
+        )
+
+        with patch("levy.decorator._get_mpp", return_value=mock_mpp):
+            app = FastAPI()
+
+            @app.get("/paid")
+            @levy("0.01")
+            async def paid(request: Request, *, credential, receipt):
+                return {"paid": True}
+
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                r = await client.get("/paid")
+
+        assert r.status_code == 500
+        body = r.json()
+        assert body["error"] == "Internal Server Error"
+        assert "recipient" in body["detail"]

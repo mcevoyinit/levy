@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import functools
 import inspect
+import logging
 from typing import Any, Awaitable, Callable
 
 from fastapi import Request
@@ -14,6 +15,8 @@ from mpp.server import Mpp
 from mpp.methods.tempo import tempo, ChargeIntent
 
 from .config import LevyConfig
+
+logger = logging.getLogger("levy")
 
 # kwargs injected by levy, hidden from FastAPI's signature inspection
 _INJECTED_PARAMS = {"credential", "receipt"}
@@ -32,6 +35,13 @@ def _get_mpp(config: LevyConfig | None = None) -> Mpp:
     cfg = config or _config or LevyConfig.from_env()
     _config = cfg
 
+    recipient = cfg.recipient or None
+    if not recipient:
+        logger.warning(
+            "LEVY_RECIPIENT is not set. All @levy endpoints will fail with "
+            "a configuration error until a recipient address is provided."
+        )
+
     _mpp = Mpp.create(
         secret_key=cfg.secret_key,
         method=tempo(
@@ -39,7 +49,7 @@ def _get_mpp(config: LevyConfig | None = None) -> Mpp:
                 chain_id=cfg.chain_id,
                 rpc_url=cfg.rpc_url,
             )},
-            recipient=cfg.recipient or None,
+            recipient=recipient,
             currency=cfg.currency,
             chain_id=cfg.chain_id,
             rpc_url=cfg.rpc_url,
@@ -98,11 +108,19 @@ def levy(
             if not realm and request:
                 realm = request.headers.get("host", "levy")
 
-            result = await mpp_server.charge(
-                authorization=auth_header,
-                amount=amount,
-                description=description or cfg.description or f"Levy: {func.__name__}",
-            )
+            try:
+                result = await mpp_server.charge(
+                    authorization=auth_header,
+                    amount=amount,
+                    description=description or cfg.description or f"Levy: {func.__name__}",
+                )
+            except Exception as exc:
+                logger.exception("levy: charge() failed for %s", func.__name__)
+                return JSONResponse(
+                    {"error": "Internal Server Error",
+                     "detail": str(exc)},
+                    status_code=500,
+                )
 
             if isinstance(result, Challenge):
                 www_auth = format_www_authenticate(result, realm=realm)

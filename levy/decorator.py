@@ -35,12 +35,9 @@ def _get_mpp(config: LevyConfig | None = None) -> Mpp:
     cfg = config or _config or LevyConfig.from_env()
     _config = cfg
 
-    recipient = cfg.recipient or None
-    if not recipient:
-        raise ValueError(
-            "LEVY_RECIPIENT must be set. Configure via environment variable "
-            "or LevyConfig(recipient='0x...')"
-        )
+    if not cfg.recipient or not cfg.recipient.strip():
+        raise ValueError("LEVY_RECIPIENT must be set to a valid Tempo address")
+    recipient = cfg.recipient
 
     _mpp = Mpp.create(
         secret_key=cfg.secret_key,
@@ -89,6 +86,16 @@ def levy(
         config: Override global config for this endpoint.
     """
 
+    if not isinstance(amount, str):
+        raise TypeError(f"amount must be a string, got {type(amount).__name__}")
+    from decimal import Decimal, InvalidOperation
+    try:
+        d = Decimal(amount)
+    except InvalidOperation:
+        raise ValueError(f"amount must be a valid decimal number, got '{amount}'")
+    if not amount or d < 0 or d.is_nan() or d.is_infinite():
+        raise ValueError(f"amount must be a non-negative finite number, got '{amount}'")
+
     def decorator(func: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitable[Any]]:
         # Store price metadata on the function for discovery
         func._levy_amount = amount  # type: ignore[attr-defined]
@@ -117,8 +124,7 @@ def levy(
             except Exception as exc:
                 logger.exception("levy: charge() failed for %s", func.__name__)
                 return JSONResponse(
-                    {"error": "Internal Server Error",
-                     "detail": str(exc)},
+                    {"error": "Internal Server Error"},
                     status_code=500,
                 )
 

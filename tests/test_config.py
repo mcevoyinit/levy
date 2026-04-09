@@ -53,6 +53,26 @@ class TestFromEnv:
         assert c.secret_key == "levy-dev-secret"
 
 
+class TestLevyInputValidation:
+    def test_levy_banana_rejected(self):
+        from levy import levy
+        with pytest.raises(ValueError): levy("banana")
+    def test_levy_empty_rejected(self):
+        from levy import levy
+        with pytest.raises(ValueError): levy("")
+    def test_levy_negative_rejected(self):
+        from levy import levy
+        with pytest.raises(ValueError): levy("-5.00")
+    def test_levy_float_rejected(self):
+        from levy import levy
+        with pytest.raises(TypeError): levy(0.01)
+    def test_whitespace_recipient_rejected(self):
+        import levy.decorator
+        levy.decorator._mpp = None
+        bad_config = LevyConfig(recipient="   ", secret_key="x")
+        with pytest.raises(ValueError): _get_mpp(bad_config)
+
+
 class TestRecipientValidation:
     def test_empty_recipient_raises_value_error(self):
         """When recipient is empty string, _get_mpp should raise ValueError."""

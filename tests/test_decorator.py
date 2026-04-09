@@ -348,7 +348,7 @@ class TestChargeErrorHandling:
         assert r.status_code == 500
         body = r.json()
         assert body["error"] == "Internal Server Error"
-        assert "RPC connection failed" in body["detail"]
+        assert "detail" not in body
 
     @pytest.mark.asyncio
     async def test_charge_value_error_returns_500(self):
@@ -373,4 +373,4 @@ class TestChargeErrorHandling:
         assert r.status_code == 500
         body = r.json()
         assert body["error"] == "Internal Server Error"
-        assert "recipient" in body["detail"]
+        assert "detail" not in body

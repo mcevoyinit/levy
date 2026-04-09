@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "levy"
+name = "tempo-levy"
 version = "0.1.0"
 description = "One decorator to monetize any FastAPI endpoint via Tempo/MPP."
 readme = "README.md"

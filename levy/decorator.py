@@ -37,9 +37,9 @@ def _get_mpp(config: LevyConfig | None = None) -> Mpp:
 
     recipient = cfg.recipient or None
     if not recipient:
-        logger.warning(
-            "LEVY_RECIPIENT is not set. All @levy endpoints will fail with "
-            "a configuration error until a recipient address is provided."
+        raise ValueError(
+            "LEVY_RECIPIENT must be set. Configure via environment variable "
+            "or LevyConfig(recipient='0x...')"
         )
 
     _mpp = Mpp.create(

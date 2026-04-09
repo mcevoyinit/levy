@@ -99,7 +99,7 @@ async def premium(request: Request, *, credential, receipt):
 ## Install
 
 ```bash
-pip install levy
+pip install tempo-levy
 ```
 
 ## Run the example

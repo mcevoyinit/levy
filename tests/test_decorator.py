@@ -182,7 +182,7 @@ class TestMppIntegration:
     def test_reconfigure_creates_new_instance(self):
         configure(TEST_CONFIG)
         m1 = _get_mpp()
-        configure(LevyConfig(secret_key="different"))
+        configure(LevyConfig(recipient=TEST_CONFIG.recipient, secret_key="different"))
         m2 = _get_mpp()
         assert m1 is not m2
 
